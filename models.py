@@ -74,6 +74,8 @@ class TextEncoder(nn.Module):
 
     self.emb = nn.Embedding(n_vocab, hidden_channels)
     nn.init.normal_(self.emb.weight, 0.0, hidden_channels**-0.5)
+    self.emb_tone = nn.Embedding(n_vocab, hidden_channels)
+    nn.init.normal_(self.emb_tone.weight, 0.0, hidden_channels**-0.5)
 
     if prenet:
       self.pre = modules.ConvReluNorm(hidden_channels, hidden_channels, hidden_channels, kernel_size=5, n_layers=3, p_dropout=0.5)
@@ -93,8 +95,8 @@ class TextEncoder(nn.Module):
       self.proj_s = nn.Conv1d(hidden_channels, out_channels, 1)
     self.proj_w = DurationPredictor(hidden_channels + gin_channels, filter_channels_dp, kernel_size, p_dropout)
   
-  def forward(self, x, x_lengths, g=None):
-    x = self.emb(x) * math.sqrt(self.hidden_channels) # [b, t, h]
+  def forward(self, x,tones, x_lengths, g=None):
+    x = self.emb(x) * math.sqrt(self.hidden_channels) + self.emb_tone(tones) * math.sqrt(self.hidden_channels) # [b, t, h]
     x = torch.transpose(x, 1, -1) # [b, h, t]
     x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
@@ -274,10 +276,10 @@ class FlowGenerator(nn.Module):
       self.emb_g = nn.Embedding(n_speakers, gin_channels)
       nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
 
-  def forward(self, x, x_lengths, y=None, y_lengths=None, g=None, gen=False, noise_scale=1., length_scale=1.):
+  def forward(self, x,tones, x_lengths, y=None, y_lengths=None, g=None, gen=False, noise_scale=1., length_scale=1.):
     if g is not None:
       g = F.normalize(self.emb_g(g)).unsqueeze(-1) # [b, h]
-    x_m, x_logs, logw, x_mask = self.encoder(x, x_lengths, g=g)
+    x_m, x_logs, logw, x_mask = self.encoder(x,tones, x_lengths, g=g)
 
     if gen:
       w = torch.exp(logw) * x_mask * length_scale

@@ -58,13 +58,15 @@ def save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path)
               'learning_rate': learning_rate}, checkpoint_path)
 
 
-def summarize(writer, global_step, scalars={}, histograms={}, images={}):
+def summarize(writer, global_step, scalars={}, histograms={}, images={}, audios={}, audio_sampling_rate=None):
   for k, v in scalars.items():
     writer.add_scalar(k, v, global_step)
   for k, v in histograms.items():
     writer.add_histogram(k, v, global_step)
   for k, v in images.items():
     writer.add_image(k, v, global_step, dataformats='HWC')
+    for k, v in audios.items():
+        writer.add_audio(k, v, global_step, audio_sampling_rate)
 
 
 def latest_checkpoint_path(dir_path, regex="G_*.pth"):
