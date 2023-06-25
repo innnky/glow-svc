@@ -43,7 +43,7 @@ def train_and_eval(rank, n_gpus, hps):
         writer = SummaryWriter(log_dir=hps.model_dir)
         writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
 
-    dist.init_process_group(backend='gloo', init_method='env://', world_size=n_gpus, rank=rank)
+    dist.init_process_group(backend='nccl', init_method='env://', world_size=n_gpus, rank=rank)
     torch.manual_seed(hps.train.seed)
     torch.cuda.set_device(rank)
 
@@ -91,6 +91,12 @@ def train_and_eval(rank, n_gpus, hps):
             evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocos)
             utils.save_checkpoint(generator, optimizer_g, hps.train.learning_rate, epoch,
                                   os.path.join(hps.model_dir, "G_{}.pth".format(epoch)))
+            try:
+                to_remove_path = os.path.join(hps.model_dir, "G_{}.pth".format(epoch - 3))
+                os.remove(to_remove_path)
+                print(f'removing {to_remove_path}')
+            except:
+                print(f'removing {to_remove_path} failed')
             train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
         else:
             train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, None, None)

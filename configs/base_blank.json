@@ -11,7 +11,7 @@
     "scheduler": "noam",
     "batch_size": 32,
     "ddi": true,
-    "fp16_run": false
+    "fp16_run": true
   },
   "data": {
     "load_mel_from_disk": false,
@@ -28,7 +28,6 @@
     "mel_fmax": null,
     "add_noise": true,
     "add_blank": true,
-    "cmudict_path": "data/cmu_dictionary",
     "spk2id": {
       "paimon": 0
     }
