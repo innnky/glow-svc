@@ -4,7 +4,7 @@ import torch
 import torchaudio
 from torch import nn
 
-from mel_processing import spectrogram_torch, spec_to_mel_torch
+from vocos.mel_processing import spectrogram_torch, spec_to_mel_torch
 from vocos.modules import safe_log
 
 

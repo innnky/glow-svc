@@ -28,6 +28,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.add_blank = getattr(hparams, "add_blank", False) # improved version
         self.feature_extractor = MelSpectrogramFeatures()
         self.spk_map = hparams.spk2id
+        self.hop_length = hparams.hop_length
         random.seed(1234)
         random.shuffle(self.audiopaths_and_text)
         self._filter()
@@ -37,19 +38,18 @@ class TextMelLoader(torch.utils.data.Dataset):
         lengths = []
         skip_num = 0
         for _id, spk, text, tone in self.audiopaths_and_text:
-            if self.min_text_len <= len(text) and len(text) <= self.max_text_len:
-                audiopath = f'dataset/{spk}/{_id}.wav'
-                if not os.path.exists(audiopath):
-                    skip_num += 1
-                    continue
-                length_ = os.path.getsize(audiopath) // (2 * self.hop_length)
-                if length_ < 60 or length_ > 1500:
-                    skip_num += 1
-                    continue
-                text = text.split(" ")
-                tone = tone.split(" ")
-                audiopaths_sid_text_new.append([audiopath, spk, text, tone])
-                lengths.append(length_)
+            audiopath = f'dataset/{spk}/{_id}.wav'
+            if not os.path.exists(audiopath):
+                skip_num += 1
+                continue
+            length_ = os.path.getsize(audiopath) // (2 * self.hop_length)
+            if length_ < 60 or length_ > 1500:
+                skip_num += 1
+                continue
+            text = text.split(" ")
+            tone = tone.split(" ")
+            audiopaths_sid_text_new.append([audiopath, spk, text, tone])
+            lengths.append(length_)
         print("skip:", skip_num, "samples！")
         self.audiopaths_and_text = audiopaths_sid_text_new
         self.lengths = lengths
@@ -57,6 +57,7 @@ class TextMelLoader(torch.utils.data.Dataset):
     def get_mel_text_pair(self, audiopath_and_text):
         # separate filename and text
         audiopath, sid, text, tone = audiopath_and_text
+        sid = torch.LongTensor([int(self.spk_map[sid])])
         text, tone = self.get_text(text, tone)
         mel = self.get_spec(audiopath)
         return (text, mel,sid,tone)
