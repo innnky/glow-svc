@@ -1,5 +1,6 @@
 import os
 import torch
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torch.multiprocessing as mp
@@ -68,6 +69,8 @@ def train_and_eval(rank, n_gpus, hps):
     generator = DDP(generator)
     epoch_str = 1
     global_step = 0
+    scaler = GradScaler(enabled=hps.train.fp16_run)
+
     try:
         _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
                                                    optimizer_g)
@@ -90,12 +93,12 @@ def train_and_eval(rank, n_gpus, hps):
                 print(f'removing {to_remove_path}')
             except:
                 print(f'removing {to_remove_path} failed')
-            train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer)
+            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
         else:
-            train(rank, epoch, hps, generator, optimizer_g, train_loader, None, None)
+            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, None, None)
 
 
-def train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer):
+def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer):
     train_loader.sampler.set_epoch(epoch)
     global global_step
 
@@ -109,20 +112,22 @@ def train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer
         # Train Generator
         optimizer_g.zero_grad()
 
-        (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_) = generator(x, tones, x_lengths, y,
-                                                                                                 y_lengths, g=sid,
-                                                                                                 gen=False)
+        with autocast(enabled=hps.train.fp16_run):
+            (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_) = generator(x, tones, x_lengths, y,
+                                                                                                     y_lengths, g=sid,
+                                                                                                     gen=False)
+            l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
+            l_length = commons.duration_loss(logw, logw_, x_lengths)
 
-        l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
-        l_length = commons.duration_loss(logw, logw_, x_lengths)
+            loss_gs = [l_mle, l_length]
+            loss_g = sum(loss_gs)
 
-        loss_gs = [l_mle, l_length]
-        loss_g = sum(loss_gs)
-
-        loss_g.backward()
+        optimizer_g.zero_grad()
+        scaler.scale(loss_g).backward()
+        scaler.unscale_(optimizer_g)
         grad_norm = commons.clip_grad_value_(generator.parameters(), 5)
-        optimizer_g.step()
-
+        scaler.step(optimizer_g)
+        scaler.update()
         if rank == 0:
             if batch_idx % hps.train.log_interval == 0:
                 (y_gen, *_), *_ = generator.module(x[:1], tones[:1], x_lengths[:1], g=sid[:1], gen=True)
@@ -169,8 +174,8 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
                                  f"gen/y_gen_{batch_idx}": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
                                  })
                 audio_dict.update({
-                    "gt/wav_gen_{}".format(batch_idx): wav_gen,
-                    "gen/wav_rec_{}".format(batch_idx): wav_rec,
+                    "gen/wav_gen_{}".format(batch_idx): wav_gen,
+                    "gt/wav_rec_{}".format(batch_idx): wav_rec,
                 })
 
         utils.summarize(
