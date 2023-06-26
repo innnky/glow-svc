@@ -13,6 +13,7 @@ import commons
 import utils
 from text.symbols import symbols
 from vocos import Vocos
+from hifigan import NsfHifiGAN
 
 global_step = 0
 
@@ -62,7 +63,8 @@ def train_and_eval(rank, n_gpus, hps):
         n_vocab=len(symbols) + getattr(hps.data, "add_blank", False),
         out_channels=hps.data.n_mel_channels,
         **hps.model).cuda(rank)
-    vocos = Vocos.from_pretrained('vocos/config.yaml', 'vocos/pytorch_model.bin').cuda()
+    # vocoder = Vocos.from_pretrained('vocos/config.yaml', 'vocos/pytorch_model.bin').cuda()
+    vocoder = NsfHifiGAN('cuda')
     optimizer_g = commons.Adam(generator.parameters(), scheduler=hps.train.scheduler,
                                dim_model=hps.model.hidden_channels, warmup_steps=hps.train.warmup_steps,
                                lr=hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
@@ -84,7 +86,7 @@ def train_and_eval(rank, n_gpus, hps):
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank == 0:
-            evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocos)
+            evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder)
             utils.save_checkpoint(generator, optimizer_g, hps.train.learning_rate, epoch,
                                   os.path.join(hps.model_dir, "G_{}.pth".format(epoch)))
             try:
@@ -154,7 +156,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
         logger.info('====> Epoch: {}'.format(epoch))
 
 
-def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocos):
+def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder):
     if rank == 0:
         global global_step
         generator.eval()
@@ -168,8 +170,8 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
                 sid = sid.cuda(rank, non_blocking=True)
 
                 (y_gen, *_), *_ = generator.module(x[:1], tones[:1], x_lengths[:1], g=sid[:1], gen=True)
-                wav_gen = vocos.decode(y_gen)
-                wav_rec = vocos.decode(y)
+                wav_gen = vocoder.decode(y_gen)
+                wav_rec = vocoder.decode(y)
                 img_dict.update({f"gt/y_org_{batch_idx}": utils.plot_spectrogram_to_numpy(y[0].data.cpu().numpy()),
                                  f"gen/y_gen_{batch_idx}": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
                                  })

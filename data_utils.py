@@ -5,7 +5,8 @@ import torch
 import torch.utils.data
 import torchaudio
 
-import commons 
+import commons
+import mel_processing
 from utils import load_wav_to_torch, load_filepaths_and_text
 from text.symbols import symbols
 from text import cleaned_text_to_sequence
@@ -26,9 +27,9 @@ class TextMelLoader(torch.utils.data.Dataset):
         self.load_mel_from_disk = hparams.load_mel_from_disk
         self.add_noise = hparams.add_noise
         self.add_blank = getattr(hparams, "add_blank", False) # improved version
-        self.feature_extractor = MelSpectrogramFeatures()
         self.spk_map = hparams.spk2id
         self.hop_length = hparams.hop_length
+        self.hps = hparams
         random.seed(1234)
         random.shuffle(self.audiopaths_and_text)
         self._filter()
@@ -64,9 +65,6 @@ class TextMelLoader(torch.utils.data.Dataset):
 
 
     def get_spec(self, filename):
-        y, sr = torchaudio.load(filename)
-        assert y.size(0) == 1
-        assert sr == self.sampling_rate
 
         mel_filename = filename.replace(".wav", ".mel.pt")
         assert mel_filename.endswith(".pt")
@@ -74,15 +72,25 @@ class TextMelLoader(torch.utils.data.Dataset):
             try:
                 mel = torch.load(mel_filename)
             except:
-                mel = self.get_mel(y, mel_filename)
+                mel, _ = mel_processing.get_mel(filename,
+                                             self.hps.sampling_rate,
+                                             self.hps.n_mel_channels,
+                                             self.hps.filter_length,
+                                             self.hps.win_length,
+                                             self.hps.hop_length,
+                                             self.hps.mel_fmin,
+                                             self.hps.mel_fmax)
+                torch.save(mel, mel_filename)
         else:
-            mel = self.get_mel(y, mel_filename)
-        return mel
-
-    def get_mel(self, audio_norm, mel_filename):
-        mel = self.feature_extractor(audio_norm)
-        mel = mel.squeeze(0)
-        torch.save(mel, mel_filename)
+            mel, _ = mel_processing.get_mel(filename,
+                                         self.hps.sampling_rate,
+                                         self.hps.n_mel_channels,
+                                         self.hps.filter_length,
+                                         self.hps.win_length,
+                                         self.hps.hop_length,
+                                         self.hps.mel_fmin,
+                                         self.hps.mel_fmax)
+            torch.save(mel, mel_filename)
         return mel
 
     def get_text(self, text, tone):
