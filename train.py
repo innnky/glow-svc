@@ -1,5 +1,6 @@
 import os
 import torch
+import tqdm
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -76,7 +77,6 @@ def train_and_eval(rank, n_gpus, hps):
     try:
         _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
                                                    optimizer_g)
-        epoch_str += 1
         optimizer_g.step_num = (epoch_str - 1) * len(train_loader)
         optimizer_g._update_learning_rate()
         global_step = (epoch_str - 1) * len(train_loader)
@@ -105,7 +105,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
     global global_step
 
     generator.train()
-    for batch_idx, (x, x_lengths, tones, y, y_lengths, sid) in enumerate(train_loader):
+    for batch_idx, (x, x_lengths, tones, y, y_lengths, sid) in tqdm.tqdm(enumerate(train_loader)):
         x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
         y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(rank, non_blocking=True)
         tones = tones.cuda(rank, non_blocking=True)
