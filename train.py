@@ -1,16 +1,10 @@
 import os
-import json
-import argparse
-import math
 import torch
-from torch import nn, optim
-from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.cuda.amp import autocast, GradScaler
 
 from data_utils import TextMelLoader, TextMelCollate
 import models
@@ -71,7 +65,6 @@ def train_and_eval(rank, n_gpus, hps):
     optimizer_g = commons.Adam(generator.parameters(), scheduler=hps.train.scheduler,
                                dim_model=hps.model.hidden_channels, warmup_steps=hps.train.warmup_steps,
                                lr=hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
-    scaler = GradScaler(enabled=hps.train.fp16_run)
     generator = DDP(generator)
     epoch_str = 1
     global_step = 0
@@ -97,12 +90,12 @@ def train_and_eval(rank, n_gpus, hps):
                 print(f'removing {to_remove_path}')
             except:
                 print(f'removing {to_remove_path} failed')
-            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
+            train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer)
         else:
-            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, None, None)
+            train(rank, epoch, hps, generator, optimizer_g, train_loader, None, None)
 
 
-def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer):
+def train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer):
     train_loader.sampler.set_epoch(epoch)
     global global_step
 
@@ -119,28 +112,16 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
         (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_) = generator(x, tones, x_lengths, y,
                                                                                                  y_lengths, g=sid,
                                                                                                  gen=False)
-        with autocast(enabled=hps.train.fp16_run):
 
-            l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
-            l_length = commons.duration_loss(logw, logw_, x_lengths)
+        l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
+        l_length = commons.duration_loss(logw, logw_, x_lengths)
 
-            loss_gs = [l_mle, l_length]
-            loss_g = sum(loss_gs)
+        loss_gs = [l_mle, l_length]
+        loss_g = sum(loss_gs)
 
-        # if hps.train.fp16_run:
-        #     with amp.scale_loss(loss_g, optimizer_g._optim) as scaled_loss:
-        #         scaled_loss.backward()
-        #     grad_norm = commons.clip_grad_value_(amp.master_params(optimizer_g._optim), 5)
-        # else:
-        #     loss_g.backward()
-        #     grad_norm = commons.clip_grad_value_(generator.parameters(), 5)
-        # optimizer_g.step()
-        optimizer_g.zero_grad()
-        scaler.scale(loss_g).backward()
-        scaler.unscale_(optimizer_g)
+        loss_g.backward()
         grad_norm = commons.clip_grad_value_(generator.parameters(), 5)
-        scaler.step(optimizer_g)
-        scaler.update()
+        optimizer_g.step()
 
         if rank == 0:
             if batch_idx % hps.train.log_interval == 0:
@@ -149,16 +130,17 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
                     epoch, batch_idx * len(x), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader),
                     loss_g.item()))
-                logger.info([x.item() for x in loss_gs] + [global_step, optimizer_g.get_lr()])
+                lr = optimizer_g.get_lr()
+                logger.info([x.item() for x in loss_gs] + [global_step, lr])
 
-                scalar_dict = {"loss/g/total": loss_g, "learning_rate": optimizer_g.get_lr(), "grad_norm": grad_norm}
+                scalar_dict = {"loss/g/total": loss_g, "learning_rate": lr, "grad_norm": grad_norm}
                 scalar_dict.update({"loss/g/{}".format(i): v for i, v in enumerate(loss_gs)})
                 utils.summarize(
                     writer=writer,
                     global_step=global_step,
-                    images={"y_org": utils.plot_spectrogram_to_numpy(y[0].data.cpu().numpy()),
-                            "y_gen": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
-                            "attn": utils.plot_alignment_to_numpy(attn[0, 0].data.cpu().numpy()),
+                    images={"train/gt/y_org": utils.plot_spectrogram_to_numpy(y[0].data.cpu().numpy()),
+                            "train/gen/y_gen": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
+                            "train/attn": utils.plot_alignment_to_numpy(attn[0, 0].data.cpu().numpy()),
                             },
                     scalars=scalar_dict)
         global_step += 1
@@ -183,12 +165,12 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
                 (y_gen, *_), *_ = generator.module(x[:1], tones[:1], x_lengths[:1], g=sid[:1], gen=True)
                 wav_gen = vocos.decode(y_gen)
                 wav_rec = vocos.decode(y)
-                img_dict.update({f"y_org_{batch_idx}": utils.plot_spectrogram_to_numpy(y[0].data.cpu().numpy()),
-                                 f"y_gen_{batch_idx}": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
+                img_dict.update({f"gt/y_org_{batch_idx}": utils.plot_spectrogram_to_numpy(y[0].data.cpu().numpy()),
+                                 f"gen/y_gen_{batch_idx}": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
                                  })
                 audio_dict.update({
-                    "wav_gen_{}".format(batch_idx): wav_gen,
-                    "wav_rec_{}".format(batch_idx): wav_rec,
+                    "gt/wav_gen_{}".format(batch_idx): wav_gen,
+                    "gen/wav_rec_{}".format(batch_idx): wav_rec,
                 })
 
         utils.summarize(

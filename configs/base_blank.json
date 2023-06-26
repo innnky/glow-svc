@@ -1,7 +1,7 @@
 {
   "train": {
     "use_cuda": true,
-    "log_interval": 20,
+    "log_interval": 50,
     "seed": 1234,
     "epochs": 10000,
     "learning_rate": 1e0,
