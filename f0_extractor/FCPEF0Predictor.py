@@ -107,3 +107,12 @@ class FCPEF0Predictor(F0Predictor):
             rtn = f0.cpu().numpy() if p_len is None else np.zeros(p_len)
             return rtn, rtn
         return self.post_process(x, self.sampling_rate, f0, p_len)
+
+    def get_activation(self, wav, down_sample=1):
+        x = torch.FloatTensor(wav).to(self.dtype).to(self.device)
+        activation, mel = self.fcpe.get_activation(x, sr=self.sampling_rate, threshold=self.threshold)
+        activation = activation[0].T
+        frame_length = activation.shape[-1]
+        activation = torch.mean(activation.view(1, 360//down_sample, down_sample, frame_length), dim=2)
+
+        return activation, mel

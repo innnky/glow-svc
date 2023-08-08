@@ -163,6 +163,22 @@ class FCPE(nn.Module):
         ci = self.cent_table[None, None, :].expand(B, N, -1)
         return torch.exp(-torch.square(ci - cents) / 1250) * mask.float()
 
+    def get_activation(self, mel):
+        """
+        input:
+            B x n_frames x n_unit
+        return:
+            dict of B x n_frames x feat
+        """
+        if self.use_input_conv:
+            x = self.stack(mel.transpose(1, 2)).transpose(1, 2)
+        else:
+            x = mel
+        x = self.decoder(x)
+        x = self.norm(x)
+        x = self.dense_out(x)  # [B,N,D]
+        x = torch.sigmoid(x)
+        return x
 
 class FCPEInfer:
     def __init__(self, model_path, device=None, dtype=torch.float32):
@@ -202,6 +218,13 @@ class FCPEInfer:
         f0 = self.model(mel=mel, infer=True, return_hz_f0=True)
         return f0
 
+    @torch.no_grad()
+    def get_activation(self, audio, sr, threshold=0.05):
+        self.model.threshold = threshold
+        audio = audio[None, :]
+        mel = self.wav2mel(audio=audio, sample_rate=sr).to(self.dtype)
+        activation = self.model.get_activation(mel=mel)
+        return activation, mel
 
 class Wav2Mel:
 
