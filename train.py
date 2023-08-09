@@ -76,16 +76,34 @@ def train_and_eval(rank, n_gpus, hps):
     epoch_str = 1
     global_step = 0
     scaler = GradScaler(enabled=hps.train.fp16_run)
-
+    #
+    # try:
+    #     _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
+    #                                                optimizer_g)
+    #     optimizer_g.step_num = (epoch_str - 1) * len(train_loader)
+    #     optimizer_g._update_learning_rate()
+    #     global_step = (epoch_str - 1) * len(train_loader)
+    # except:
+    #     if hps.train.ddi and os.path.isfile(os.path.join(hps.model_dir, "ddi_G.pth")):
+    #         _ = utils.load_checkpoint(os.path.join(hps.model_dir, "ddi_G.pth"), generator, optimizer_g)
+    #
+    pretrain_dir = "logs/diff"
     try:
-        _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
-                                                   optimizer_g)
-        optimizer_g.step_num = (epoch_str - 1) * len(train_loader)
-        optimizer_g._update_learning_rate()
-        global_step = (epoch_str - 1) * len(train_loader)
+        if pretrain_dir is None:
+            _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.s1_ckpt_dir, "G_*.pth"), generator,
+                                                       optimizer_g, False)
+            epoch_str = max(epoch_str, 1)
+            global_step = (epoch_str - 1) * len(train_loader)
+        else:
+            _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(pretrain_dir, "G_*.pth"), generator,
+                                                       optimizer_g, True)
+            epoch_str = 1
+            global_step = 0
     except:
-        if hps.train.ddi and os.path.isfile(os.path.join(hps.model_dir, "ddi_G.pth")):
-            _ = utils.load_checkpoint(os.path.join(hps.model_dir, "ddi_G.pth"), generator, optimizer_g)
+        print("load pretrain failed!!!!\n" * 10)
+        epoch_str = 1
+        global_step = 0
+
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
         train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)

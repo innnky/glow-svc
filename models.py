@@ -322,7 +322,8 @@ class FlowGenerator(nn.Module):
         if n_speakers > 1:
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
             nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
-        self.f0_emb = nn.Conv1d(1, gin_channels, 2, stride=2)
+        self.f0_emb = nn.Conv1d(1, gin_channels, 1)
+        self.f0_downsample = nn.Conv1d(gin_channels, gin_channels, 2, stride=2)
         self.f0_predictor = F0Predictor(hidden_channels,
                                filter_channels,
                                n_heads,
@@ -359,15 +360,14 @@ class FlowGenerator(nn.Module):
             f0_emb = self.f0_emb(pred_lf0)
 
             z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
-            y, logdet = self.decoder(z, z_mask, g=(g+f0_emb), reverse=True)
+            y, logdet = self.decoder(z, z_mask, g=(g+self.f0_downsample(f0_emb)), reverse=True)
             return y, pred_f0
         else:
             f0 = f0[:, :y.size(2)]
             gt_lf0 = 2595. * torch.log10(1. + f0 / 700.) / 500
             gt_lf0 = gt_lf0.unsqueeze(1)
             f0_emb = self.f0_emb(gt_lf0)
-            # print('g', (g+f0_emb).shape, 'y', y.shape, 'z_mask', z_mask.shape)
-            z, logdet = self.decoder(y, z_mask, g=(g+f0_emb), reverse=False)
+            z, logdet = self.decoder(y, z_mask, g=(g+self.f0_downsample(f0_emb)), reverse=False)
             with torch.no_grad():
                 x_s_sq_r = torch.exp(-2 * x_logs)
                 logp1 = torch.sum(-0.5 * math.log(2 * math.pi) - x_logs, [1]).unsqueeze(-1)  # [b, t, 1]
