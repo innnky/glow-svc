@@ -27,7 +27,7 @@ We also provide the [pretrained model](https://drive.google.com/open?id=1JiCMBVT
 This result was not included in the paper. Lately, we found that two modifications help to improve the synthesis quality of Glow-TTS.; 1) moving to a vocoder, [HiFi-GAN](https://arxiv.org/abs/2010.05646) to reduce noise, 2) putting a blank token between any two input tokens to improve pronunciation. Specifically, 
 we used a fine-tuned vocoder with Tacotron 2 which is provided as a pretrained model in the [HiFi-GAN repo](https://github.com/jik876/hifi-gan). If you're interested, please listen to the samples in our [demo](https://jaywalnut310.github.io/glow-tts-demo/index.html).
 
-For adding a blank token, we provide a [config file](./configs/base_blank.json) and a [pretrained model](https://drive.google.com/open?id=1RxR6JWg6WVBZYb-pIw58hi1XLNb5aHEi). We also provide an inference example [inference_hifigan.ipynb](./inference_hifigan.ipynb). You may need to initialize HiFi-GAN submodule: `git submodule init; git submodule update`
+For adding a blank token, we provide a [config file](./configs/config.json) and a [pretrained model](https://drive.google.com/open?id=1RxR6JWg6WVBZYb-pIw58hi1XLNb5aHEi). We also provide an inference example [inference_hifigan.ipynb](./inference_hifigan.ipynb). You may need to initialize HiFi-GAN submodule: `git submodule init; git submodule update`
 
 
 ## 1. Environments we use

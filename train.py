@@ -8,7 +8,7 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from data_utils import TextMelLoader, TextMelCollate
+from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate
 import models
 import commons
 import utils
@@ -44,18 +44,18 @@ def train_and_eval(rank, n_gpus, hps):
     torch.manual_seed(hps.train.seed)
     torch.cuda.set_device(rank)
 
-    train_dataset = TextMelLoader(hps.data.training_files, hps.data)
+    train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps.data)
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
         num_replicas=n_gpus,
         rank=rank,
         shuffle=True)
-    collate_fn = TextMelCollate(1)
+    collate_fn = TextAudioSpeakerCollate()
     train_loader = DataLoader(train_dataset, num_workers=3, shuffle=False,
                               batch_size=hps.train.batch_size, pin_memory=True,
-                              drop_last=True, collate_fn=collate_fn, sampler=train_sampler)
+                              drop_last=True, collate_fn=collate_fn, sampler=train_sampler, persistent_workers=True)
     if rank == 0:
-        val_dataset = TextMelLoader(hps.data.validation_files, hps.data)
+        val_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps.data)
         val_loader = DataLoader(val_dataset, num_workers=0, shuffle=False,
                                 batch_size=1, pin_memory=True,
                                 drop_last=True, collate_fn=collate_fn)
@@ -105,23 +105,26 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
     global global_step
 
     generator.train()
-    for batch_idx, (x, x_lengths, tones, y, y_lengths, sid) in tqdm.tqdm(enumerate(train_loader)):
+    for batch_idx, (x, x_lengths, mel,mel_lengths,wav, wav_lengths, speakers, tone, language, f0) in enumerate(tqdm(train_loader)):
         x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
-        y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(rank, non_blocking=True)
-        tones = tones.cuda(rank, non_blocking=True)
-        sid = sid.cuda(rank, non_blocking=True)
+        mel, mel_lengths = mel.cuda(rank, non_blocking=True), mel_lengths.cuda(rank, non_blocking=True)
+        speakers = speakers.cuda(rank, non_blocking=True)
+        tone = tone.cuda(rank, non_blocking=True)
+        language = language.cuda(rank, non_blocking=True)
+        f0 = f0.cuda(rank, non_blocking=True)
 
         # Train Generator
         optimizer_g.zero_grad()
 
         with autocast(enabled=hps.train.fp16_run):
-            (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_) = generator(x, tones, x_lengths, y,
-                                                                                                     y_lengths, g=sid,
+            (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), \
+                (attn, logw, logw_), l_noise, gt_lf0, pred_lf0, loss_f0 = generator(x, tone, language, x_lengths, mel,
+                                                                                                     mel_lengths,f0, g=speakers,
                                                                                                      gen=False)
             l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
             l_length = commons.duration_loss(logw, logw_, x_lengths)
 
-            loss_gs = [l_mle, l_length]
+            loss_gs = [l_mle, l_length, loss_f0, l_noise]
             loss_g = sum(loss_gs)
 
         optimizer_g.zero_grad()
@@ -132,7 +135,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
         scaler.update()
         if rank == 0:
             if batch_idx % hps.train.log_interval == 0:
-                (y_gen, *_), *_ = generator.module(x[:1], tones[:1], x_lengths[:1], g=sid[:1], gen=True)
+                y_gen, _ = generator.module(x, tone, language, x_lengths,g=speakers, gen=True, glow=True)
                 logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * len(x), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader),
@@ -145,9 +148,12 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
                 utils.summarize(
                     writer=writer,
                     global_step=global_step,
-                    images={"train/gt/y_org": utils.plot_spectrogram_to_numpy(y[0].data.cpu().numpy()),
-                            "train/gen/y_gen": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
+                    images={"train/gt/mel": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
+                            "train/gen/mel": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
                             "train/attn": utils.plot_alignment_to_numpy(attn[0, 0].data.cpu().numpy()),
+                            "all/pred_lf0": utils.plot_data_to_numpy(gt_lf0[0, 0, :].cpu().numpy(),
+                                                                     pred_lf0[0, 0, :].detach().cpu().numpy())
+
                             },
                     scalars=scalar_dict)
         global_step += 1
@@ -163,21 +169,36 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
         audio_dict = {}
         img_dict = {}
         with torch.no_grad():
-            for batch_idx, (x, x_lengths, tones, y, y_lengths, sid) in enumerate(val_loader):
+            for batch_idx, (
+            x, x_lengths, mel, mel_lengths, wav, wav_lengths, speakers, tone, language, f0) in enumerate(
+                    val_loader):
                 x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
-                y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(rank, non_blocking=True)
-                tones = tones.cuda(rank, non_blocking=True)
-                sid = sid.cuda(rank, non_blocking=True)
+                mel, mel_lengths = mel.cuda(rank, non_blocking=True), mel_lengths.cuda(rank, non_blocking=True)
+                speakers = speakers.cuda(rank, non_blocking=True)
+                tone = tone.cuda(rank, non_blocking=True)
+                language = language.cuda(rank, non_blocking=True)
+                f0 = f0.cuda(rank, non_blocking=True)
 
-                (y_gen, *_), *_ = generator.module(x[:1], tones[:1], x_lengths[:1], g=sid[:1], gen=True)
-                wav_gen = vocoder.decode(y_gen)
-                wav_rec = vocoder.decode(y)
-                img_dict.update({f"gt/y_org_{batch_idx}": utils.plot_spectrogram_to_numpy(y[0].data.cpu().numpy()),
-                                 f"gen/y_gen_{batch_idx}": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
+                mel_flow, pred_f0 = generator.module(x, tone, language, x_lengths,g=speakers, gen=True, glow=True)
+                y_flow = vocoder.spec2wav(mel_flow.squeeze(0).transpose(0, 1).cpu().numpy(),
+                                         f0=pred_f0[0, 0, :].cpu().numpy())
+
+                mel_diff, pred_f0 = generator.module(x, tone, language, x_lengths,g=speakers, gen=True, glow=False)
+                y_diff = vocoder.spec2wav(mel_diff.squeeze(0).transpose(0, 1).cpu().numpy(),
+                                         f0=pred_f0[0, 0, :].cpu().numpy())
+
+
+                y_rec = vocoder.spec2wav(mel.squeeze(0).transpose(0, 1).cpu().numpy(),
+                                         f0=f0[0, :].cpu().numpy())
+
+                img_dict.update({f"gen/mel_{batch_idx}": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
+                                 f"gen/mel_flow_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_flow[0].data.cpu().numpy()),
+                                 f"gen/mel_diff_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_diff[0].data.cpu().numpy()),
                                  })
                 audio_dict.update({
-                    "gen/wav_gen_{}".format(batch_idx): wav_gen,
-                    "gt/wav_rec_{}".format(batch_idx): wav_rec,
+                    "gen/wav_gen_{}_diff".format(batch_idx): y_diff,
+                    "gen/wav_gen_{}_flow".format(batch_idx): y_flow,
+                    "gen/wav_gen_{}_rec".format(batch_idx): y_rec,
                 })
 
         utils.summarize(
