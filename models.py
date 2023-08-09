@@ -76,6 +76,8 @@ class TextEncoder(nn.Module):
         nn.init.normal_(self.emb.weight, 0.0, hidden_channels ** -0.5)
         self.emb_tone = nn.Embedding(n_vocab, hidden_channels)
         nn.init.normal_(self.emb_tone.weight, 0.0, hidden_channels ** -0.5)
+        self.emb_language = nn.Embedding(n_vocab, hidden_channels)
+        nn.init.normal_(self.emb_language.weight, 0.0, hidden_channels ** -0.5)
 
         if prenet:
             self.pre = modules.ConvReluNorm(hidden_channels, hidden_channels, hidden_channels, kernel_size=5,
@@ -96,9 +98,8 @@ class TextEncoder(nn.Module):
             self.proj_s = nn.Conv1d(hidden_channels, out_channels, 1)
         self.proj_w = DurationPredictor(hidden_channels + gin_channels, filter_channels_dp, kernel_size, p_dropout)
 
-    def forward(self, x, tones, x_lengths, g=None):
-        x = self.emb(x) * math.sqrt(self.hidden_channels) + self.emb_tone(tones) * math.sqrt(
-            self.hidden_channels)  # [b, t, h]
+    def forward(self, x, tones, language, x_lengths, g=None):
+        x = (self.emb(x)+self.emb_tone(tones)+self.emb_language(language)) * math.sqrt(self.hidden_channels)
         x = torch.transpose(x, 1, -1)  # [b, h, t]
         x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
@@ -119,7 +120,7 @@ class TextEncoder(nn.Module):
             x_logs = torch.zeros_like(x_m)
 
         logw = self.proj_w(x_dp, x_mask)
-        return x_m, x_logs, logw, x_mask
+        return x, x_m, x_logs, logw, x_mask
 
 
 class FlowSpecDecoder(nn.Module):
@@ -187,6 +188,50 @@ class FlowSpecDecoder(nn.Module):
     def store_inverse(self):
         for f in self.flows:
             f.store_inverse()
+
+
+class F0Predictor(nn.Module):
+    def __init__(self,
+                 hidden_channels,
+                 filter_channels,
+                 n_heads,
+                 n_layers,
+                 kernel_size,
+                 p_dropout,
+                 gin_channels,
+                 ):
+        super().__init__()
+        self.hidden_channels = hidden_channels
+        self.filter_channels = filter_channels
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.kernel_size = kernel_size
+        self.p_dropout = p_dropout
+
+        self.enc_f0 = attentions.Encoder(
+            hidden_channels,
+            filter_channels,
+            n_heads,
+            4,
+            kernel_size,
+            p_dropout)
+        self.proj_f0 = nn.Conv1d(hidden_channels, 1, 1)
+        self.cond = nn.Conv1d(gin_channels, hidden_channels, 1)
+
+    def forward(self,x, x_mask, gt_lf0=None, g=None):
+        x = self.enc_f0((x + self.cond(g.detach())) * x_mask, x_mask)
+        pred_lf0 = self.proj_f0(x)
+
+        if gt_lf0 != None:
+            assert pred_lf0.shape == gt_lf0.shape, (pred_lf0.shape, gt_lf0.shape)
+            loss = F.mse_loss(gt_lf0, pred_lf0)
+            return pred_lf0, loss
+        else:
+            pred_f0 = pred_lf0 * 500
+            pred_f0 = pred_f0 / 2595
+            pred_f0 = torch.pow(10, pred_f0)
+            pred_f0 = (pred_f0 - 1) * 700.
+            return pred_lf0, pred_f0
 
 
 class FlowGenerator(nn.Module):
@@ -277,11 +322,18 @@ class FlowGenerator(nn.Module):
         if n_speakers > 1:
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
             nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
-
-    def forward(self, x, tones, x_lengths, y=None, y_lengths=None, g=None, gen=False, noise_scale=1., length_scale=1.):
-        if g is not None:
-            g = F.normalize(self.emb_g(g)).unsqueeze(-1)  # [b, h]
-        x_m, x_logs, logw, x_mask = self.encoder(x, tones, x_lengths, g=g)
+        self.f0_emb = nn.Conv1d(1, gin_channels, 2, stride=2)
+        self.f0_predictor = F0Predictor(hidden_channels,
+                               filter_channels,
+                               n_heads,
+                               n_layers_enc,
+                               kernel_size,
+                               p_dropout,
+                               gin_channels
+                               )
+    def forward(self, x, tones, language, x_lengths, y=None, y_lengths=None,f0=None, g=None, gen=False, noise_scale=1., length_scale=1., glow=True):
+        g = F.normalize(self.emb_g(g)).unsqueeze(-1)  # [b, h]
+        x, x_m, x_logs, logw, x_mask = self.encoder(x, tones,language, x_lengths, g=g)
 
         if gen:
             w = torch.exp(logw) * x_mask * length_scale
@@ -300,13 +352,22 @@ class FlowGenerator(nn.Module):
                                                                                                2)  # [b, t', t], [b, t, d] -> [b, d, t']
             z_logs = torch.matmul(attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)).transpose(1,
                                                                                                      2)  # [b, t', t], [b, t, d] -> [b, d, t']
-            logw_ = torch.log(1e-8 + torch.sum(attn, -1)) * x_mask
+            x = torch.matmul(attn.squeeze(1).transpose(1, 2), x.transpose(1, 2)).transpose(1,2)
+
+            # f0 predict
+            pred_lf0, pred_f0 = self.f0_predictor(x, z_mask, g=g)
+            f0_emb = self.f0_emb(pred_lf0)
 
             z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
-            y, logdet = self.decoder(z, z_mask, g=g, reverse=True)
-            return (y, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_)
+            y, logdet = self.decoder(z, z_mask, g=(g+f0_emb), reverse=True)
+            return y, pred_f0
         else:
-            z, logdet = self.decoder(y, z_mask, g=g, reverse=False)
+            f0 = f0[:, :y.size(2)]
+            gt_lf0 = 2595. * torch.log10(1. + f0 / 700.) / 500
+            gt_lf0 = gt_lf0.unsqueeze(1)
+            f0_emb = self.f0_emb(gt_lf0)
+            # print('g', (g+f0_emb).shape, 'y', y.shape, 'z_mask', z_mask.shape)
+            z, logdet = self.decoder(y, z_mask, g=(g+f0_emb), reverse=False)
             with torch.no_grad():
                 x_s_sq_r = torch.exp(-2 * x_logs)
                 logp1 = torch.sum(-0.5 * math.log(2 * math.pi) - x_logs, [1]).unsqueeze(-1)  # [b, t, 1]
@@ -321,7 +382,13 @@ class FlowGenerator(nn.Module):
             z_logs = torch.matmul(attn.squeeze(1).transpose(1, 2), x_logs.transpose(1, 2)).transpose(1,
                                                                                                      2)  # [b, t', t], [b, t, d] -> [b, d, t']
             logw_ = torch.log(1e-8 + torch.sum(attn, -1)) * x_mask
-            return (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_)
+
+            x = torch.matmul(attn.squeeze(1).transpose(1, 2), x.transpose(1, 2)).transpose(1,2)
+
+            # f0 predict
+            pred_lf0, loss_f0 = self.f0_predictor(x, z_mask, gt_lf0, g=g)
+            loss_noise = torch.FloatTensor([0]).to(x.device)
+            return (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_),loss_noise, gt_lf0, pred_lf0, loss_f0
 
     def preprocess(self, y, y_lengths, y_max_length):
         if y_max_length is not None:

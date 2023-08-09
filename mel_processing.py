@@ -101,7 +101,7 @@ class STFT():
         # print(333,spec)
         spec = dynamic_range_compression_torch(spec, clip_val=clip_val)
         # print(444,spec)
-        return spec,y
+        return spec
 
     def __call__(self, audiopath):
         audio, sr = load_wav_to_torch(audiopath, target_sr=self.target_sr)
@@ -109,17 +109,13 @@ class STFT():
         return spect
 
 
-def get_mel(inp_path, sampling_rate, num_mels, n_fft, win_size, hop_size, fmin, fmax):
-    assert inp_path.endswith('.wav')
+def get_mel(wav_torch, sampling_rate, num_mels, n_fft, win_size, hop_size, fmin, fmax):
     stft = STFT(sampling_rate, num_mels, n_fft, win_size, hop_size, fmin, fmax)
     with torch.no_grad():
-        wav_torch, _ = load_wav_to_torch(inp_path, target_sr=stft.target_sr)
-        res = stft.get_mel(wav_torch.unsqueeze(0))
-        mel_torch= res[0].squeeze(0).T
-        y = res[1]
+        mel_torch = stft.get_mel(wav_torch.unsqueeze(0)).squeeze(0).T
         # log mel to log10 mel
         mel_torch = 0.434294 * mel_torch.T
-        return mel_torch, wav_torch.unsqueeze(0), y
+        return mel_torch
 
 if __name__ == '__main__':
     mel, wav = get_mel("/Users/xingyijin/Downloads/api.wav", 16000, 80, 1024, 256, 80, 20, 11025)

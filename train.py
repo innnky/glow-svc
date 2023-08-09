@@ -1,19 +1,22 @@
 import os
 import torch
-import tqdm
+from tqdm import tqdm
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+import logging
+logging.getLogger("matplotlib").setLevel(logging.INFO)
+logging.getLogger("h5py").setLevel(logging.INFO)
+logging.getLogger("numba").setLevel(logging.INFO)
 
 from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate
 import models
 import commons
 import utils
 from text.symbols import symbols
-from vocos import Vocos
 from hifigan import NsfHifiGAN
 
 global_step = 0
@@ -85,6 +88,7 @@ def train_and_eval(rank, n_gpus, hps):
             _ = utils.load_checkpoint(os.path.join(hps.model_dir, "ddi_G.pth"), generator, optimizer_g)
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
+        train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
         if rank == 0:
             evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder)
             utils.save_checkpoint(generator, optimizer_g, hps.train.learning_rate, epoch,
@@ -95,7 +99,6 @@ def train_and_eval(rank, n_gpus, hps):
                 print(f'removing {to_remove_path}')
             except:
                 print(f'removing {to_remove_path} failed')
-            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
         else:
             train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, None, None)
 
