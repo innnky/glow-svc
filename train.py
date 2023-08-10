@@ -69,9 +69,14 @@ def train_and_eval(rank, n_gpus, hps):
         **hps.model).cuda(rank)
     # vocoder = Vocos.from_pretrained('vocos/config.yaml', 'vocos/pytorch_model.bin').cuda()
     vocoder = NsfHifiGAN('cuda')
-    optimizer_g = commons.Adam(generator.parameters(), scheduler=hps.train.scheduler,
-                               dim_model=hps.model.hidden_channels, warmup_steps=hps.train.warmup_steps,
-                               lr=hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
+    optimizer_g = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, generator.parameters()),
+        hps.train.learning_rate,
+        betas=hps.train.betas,
+        eps=hps.train.eps)
+    # optimizer_g = commons.Adam(generator.parameters(), scheduler=hps.train.scheduler,
+    #                            dim_model=hps.model.hidden_channels, warmup_steps=hps.train.warmup_steps,
+    #                            lr=hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
     generator = DDP(generator)
     epoch_str = 1
     global_step = 0
@@ -103,6 +108,7 @@ def train_and_eval(rank, n_gpus, hps):
         print("load pretrain failed!!!!\n" * 10)
         epoch_str = 1
         global_step = 0
+    scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optimizer_g, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2)
 
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
@@ -119,6 +125,7 @@ def train_and_eval(rank, n_gpus, hps):
                 print(f'removing {to_remove_path} failed')
         else:
             train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, None, None)
+        scheduler_g.step()
 
 
 def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer):
@@ -161,7 +168,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
                     epoch, batch_idx * len(x), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader),
                     loss_g.item()))
-                lr = optimizer_g.get_lr()
+                lr = optimizer_g.param_groups[0]['lr']
                 logger.info([x.item() for x in loss_gs] + [global_step, lr])
 
                 scalar_dict = {"loss/g/total": loss_g, "learning_rate": lr, "grad_norm": grad_norm}
