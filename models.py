@@ -7,6 +7,7 @@ import modules
 import commons
 import attentions
 import monotonic_align
+from diffusion import GaussianDiffusion
 
 
 class DurationPredictor(nn.Module):
@@ -234,6 +235,89 @@ class F0Predictor(nn.Module):
             return pred_lf0, pred_f0
 
 
+
+class DiffusionWrapper(nn.Module):
+    def __init__(self,
+                 out_channels,
+                 in_channels,
+                 residual_channels=512,
+                 residual_layers=20,
+                 denoiser_dropout=0.2,
+                 noise_schedule_naive='cosine',
+                 timesteps=100,
+                 max_beta=0.06,
+                 s=0.008,
+                 noise_loss='l1',
+                 stats_path=None,
+                 gin_channels=None
+                 ):
+        super().__init__()
+        self.diffusion = GaussianDiffusion(out_channels,
+                                           in_channels,
+                                           residual_channels,
+                                           residual_layers,
+                                           denoiser_dropout,
+                                           noise_schedule_naive,
+                                           timesteps,
+                                           max_beta,
+                                           s,
+                                           noise_loss,
+                                           stats_path
+                                           )
+        self.cond = nn.Conv1d(gin_channels, in_channels, 1)
+    def forward(self, x, y, mask, g):
+        cond = self.cond(g.detach())
+        _, _, loss_noise, _ = self.diffusion(y.transpose(1, 2),(x+cond).transpose(1, 2), ~(mask.transpose(1, 2).bool()))
+        return loss_noise
+
+    def infer(self, x, g):
+        cond = self.cond(g)
+        output, _, _, _ = self.diffusion(None, (x+cond).transpose(1, 2), None)
+        return output.transpose(1, 2)
+
+
+class VarianceDiffusion(DiffusionWrapper):
+    def __init__(self,
+                 repeat_dim,
+                 in_channels,
+                 residual_channels=512,
+                 residual_layers=20,
+                 denoiser_dropout=0.2,
+                 noise_schedule_naive='cosine',
+                 timesteps=100,
+                 max_beta=0.06,
+                 s=0.008,
+                 noise_loss='l1',
+                 stats_path=None,
+                 gin_channels=None
+                 ):
+        super().__init__(repeat_dim,
+                 in_channels,
+                 residual_channels,
+                 residual_layers,
+                 denoiser_dropout,
+                 noise_schedule_naive,
+                 timesteps,
+                 max_beta,
+                 s,
+                 noise_loss,
+                 stats_path,
+                 gin_channels)
+        self.cond = nn.Conv1d(gin_channels, in_channels, 1)
+        self.repeat_dim = 64
+
+    def forward(self, x, y, mask, g):
+        y = y.repeat(1, self.repeat_dim, 1)
+        return super().forward(x, y, mask, g)
+
+    def infer(self, x, g):
+        pred_variance = super().infer(x, g)
+        pred_variance = torch.mean(pred_variance, dim=1).unsqueeze(1)
+        return pred_variance
+
+
+
+
 class FlowGenerator(nn.Module):
     def __init__(self,
                  n_vocab,
@@ -332,6 +416,23 @@ class FlowGenerator(nn.Module):
                                p_dropout,
                                gin_channels
                                )
+
+        # self.duration_diffusion = VarianceDiffusion(
+        #     repeat_dim=64,
+        #     in_channels=hidden_channels,
+        #     timesteps=100,
+        #     stats_path="configs/duration_stats.pt",
+        #     gin_channels=gin_channels
+        # )
+
+        self.pitch_diffusion = VarianceDiffusion(
+            repeat_dim=64,
+            in_channels=hidden_channels,
+            timesteps=100,
+            stats_path="configs/pitch_stats.pt",
+            gin_channels=gin_channels
+        )
+
     def forward(self, x, tones, language, x_lengths, y=None, y_lengths=None,f0=None, g=None, gen=False, noise_scale=1., length_scale=1., glow=True):
         g = F.normalize(self.emb_g(g)).unsqueeze(-1)  # [b, h]
         x, x_m, x_logs, logw, x_mask = self.encoder(x, tones,language, x_lengths, g=g)
@@ -356,7 +457,15 @@ class FlowGenerator(nn.Module):
             x = torch.matmul(attn.squeeze(1).transpose(1, 2), x.transpose(1, 2)).transpose(1,2)
 
             # f0 predict
-            pred_lf0, pred_f0 = self.f0_predictor(x, z_mask, g=g)
+            if glow:
+                pred_lf0, pred_f0 = self.f0_predictor(x, z_mask, g=g)
+            else:
+                pred_lf0 = self.pitch_diffusion.infer(x, g=g)
+                pred_f0 = pred_lf0 * 500
+                pred_f0 = pred_f0 / 2595
+                pred_f0 = torch.pow(10, pred_f0)
+                pred_f0 = (pred_f0 - 1) * 700.
+
             f0_emb = self.f0_emb(pred_lf0)
 
             z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
@@ -387,7 +496,8 @@ class FlowGenerator(nn.Module):
 
             # f0 predict
             pred_lf0, loss_f0 = self.f0_predictor(x, z_mask, gt_lf0, g=g)
-            loss_noise = torch.FloatTensor([0]).to(x.device)
+            loss_noise = self.pitch_diffusion(x, gt_lf0, z_mask, g=g)
+            # loss_noise = torch.FloatTensor([0]).to(x.device)
             return (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), (attn, logw, logw_),loss_noise, gt_lf0, pred_lf0, loss_f0
 
     def preprocess(self, y, y_lengths, y_max_length):

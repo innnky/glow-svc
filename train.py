@@ -92,7 +92,7 @@ def train_and_eval(rank, n_gpus, hps):
     #     if hps.train.ddi and os.path.isfile(os.path.join(hps.model_dir, "ddi_G.pth")):
     #         _ = utils.load_checkpoint(os.path.join(hps.model_dir, "ddi_G.pth"), generator, optimizer_g)
     #
-    pretrain_dir = "logs/diff"
+    pretrain_dir = "logs/opt"
     try:
         if pretrain_dir is None:
             _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.s1_ckpt_dir, "G_*.pth"), generator,
@@ -163,7 +163,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
         scaler.update()
         if rank == 0:
             if batch_idx % hps.train.log_interval == 0:
-                y_gen, _ = generator.module(x, tone, language, x_lengths,g=speakers, gen=True, glow=True)
+                y_gen, _ = generator.module(x[:1], tone[:1], language[:1], x_lengths[:1],g=speakers[:1], gen=True, glow=True)
                 logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * len(x), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader),
