@@ -398,7 +398,6 @@ class FlowGenerator(nn.Module):
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
             nn.init.uniform_(self.emb_g.weight, -0.1, 0.1)
         self.f0_emb = nn.Conv1d(1, gin_channels, 1)
-        self.f0_downsample = nn.Conv1d(gin_channels, gin_channels, 2, stride=2)
 
     def forward(self, x, y=None, lengths=None,f0=None, g=None, gen=False, noise_scale=1., length_scale=1., glow=True):
         if lengths is None:
@@ -415,11 +414,11 @@ class FlowGenerator(nn.Module):
 
         if gen:
             z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
-            y, logdet = self.decoder(z, z_mask, g=(g+self.f0_downsample(f0_emb)), reverse=True)
-            return y, gt_lf0
+            y, logdet = self.decoder(z, z_mask, g=g, reverse=True)
+            return y, f0.unsqueeze(1)
         else:
             y = y[:, :, :x.size(2)]
-            z, logdet = self.decoder(y, z_mask, g=(g+self.f0_downsample(f0_emb)), reverse=False)
+            z, logdet = self.decoder(y, z_mask, g=g, reverse=False)
             # loss_noise = self.pitch_diffusion(x, gt_lf0, z_mask, g=g)
             loss_noise = torch.FloatTensor([0]).to(x.device)
             return (z, z_m, z_logs, logdet, z_mask),loss_noise
