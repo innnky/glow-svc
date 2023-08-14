@@ -92,7 +92,7 @@ def train_and_eval(rank, n_gpus, hps):
     #     if hps.train.ddi and os.path.isfile(os.path.join(hps.model_dir, "ddi_G.pth")):
     #         _ = utils.load_checkpoint(os.path.join(hps.model_dir, "ddi_G.pth"), generator, optimizer_g)
     #
-    pretrain_dir = "logs/opt"
+    pretrain_dir = None
     try:
         if pretrain_dir is None:
             _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.s1_ckpt_dir, "G_*.pth"), generator,
@@ -112,9 +112,9 @@ def train_and_eval(rank, n_gpus, hps):
 
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
-        train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
         if rank == 0:
             evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder)
+            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
             utils.save_checkpoint(generator, optimizer_g, hps.train.learning_rate, epoch,
                                   os.path.join(hps.model_dir, "G_{}.pth".format(epoch)))
             try:
@@ -133,26 +133,20 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
     global global_step
 
     generator.train()
-    for batch_idx, (x, x_lengths, mel,mel_lengths,wav, wav_lengths, speakers, tone, language, f0) in enumerate(tqdm(train_loader)):
-        x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
+    for batch_idx, (x, mel,mel_lengths,wav, wav_lengths, speakers, f0) in enumerate(tqdm(train_loader)):
         mel, mel_lengths = mel.cuda(rank, non_blocking=True), mel_lengths.cuda(rank, non_blocking=True)
         speakers = speakers.cuda(rank, non_blocking=True)
-        tone = tone.cuda(rank, non_blocking=True)
-        language = language.cuda(rank, non_blocking=True)
+        x = x.cuda(rank, non_blocking=True)
         f0 = f0.cuda(rank, non_blocking=True)
 
         # Train Generator
         optimizer_g.zero_grad()
 
         with autocast(enabled=hps.train.fp16_run):
-            (z, z_m, z_logs, logdet, z_mask), (x_m, x_logs, x_mask), \
-                (attn, logw, logw_), l_noise, gt_lf0, pred_lf0, loss_f0 = generator(x, tone, language, x_lengths, mel,
-                                                                                                     mel_lengths,f0, g=speakers,
-                                                                                                     gen=False)
+            (z, z_m, z_logs, logdet, z_mask), l_noise = generator(x, mel, mel_lengths,f0, g=speakers, gen=False)
             l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
-            l_length = commons.duration_loss(logw, logw_, x_lengths)
 
-            loss_gs = [l_mle, l_length, loss_f0, l_noise]
+            loss_gs = [l_mle, l_noise]
             loss_g = sum(loss_gs)
 
         optimizer_g.zero_grad()
@@ -163,7 +157,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
         scaler.update()
         if rank == 0:
             if batch_idx % hps.train.log_interval == 0:
-                y_gen, _ = generator.module(x[:1], tone[:1], language[:1], x_lengths[:1],g=speakers[:1], gen=True, glow=True)
+                y_gen, _ = generator.module(x[:1],f0=f0[:1], g=speakers[:1], gen=True, glow=True)
                 logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * len(x), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader),
@@ -177,11 +171,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
                     writer=writer,
                     global_step=global_step,
                     images={"train/gt/mel": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
-                            "train/gen/mel": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy()),
-                            "train/attn": utils.plot_alignment_to_numpy(attn[0, 0].data.cpu().numpy()),
-                            "all/pred_lf0": utils.plot_data_to_numpy(gt_lf0[0, 0, :].cpu().numpy(),
-                                                                     pred_lf0[0, 0, :].detach().cpu().numpy())
-
+                            "train/gen/mel": utils.plot_spectrogram_to_numpy(y_gen[0].data.cpu().numpy())
                             },
                     scalars=scalar_dict)
         global_step += 1
@@ -197,23 +187,20 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
         audio_dict = {}
         img_dict = {}
         with torch.no_grad():
-            for batch_idx, (
-            x, x_lengths, mel, mel_lengths, wav, wav_lengths, speakers, tone, language, f0) in enumerate(
+            for batch_idx, (x, mel,mel_lengths,wav, wav_lengths, speakers, f0) in enumerate(
                     val_loader):
-                x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
                 mel, mel_lengths = mel.cuda(rank, non_blocking=True), mel_lengths.cuda(rank, non_blocking=True)
                 speakers = speakers.cuda(rank, non_blocking=True)
-                tone = tone.cuda(rank, non_blocking=True)
-                language = language.cuda(rank, non_blocking=True)
+                x = x.cuda(rank, non_blocking=True)
                 f0 = f0.cuda(rank, non_blocking=True)
 
-                mel_flow, pred_f0 = generator.module(x, tone, language, x_lengths,g=speakers, gen=True, glow=True)
+                mel_flow, pred_f0 = generator.module(x, f0=f0, g=speakers, gen=True, glow=True)
                 y_flow = vocoder.spec2wav(mel_flow.squeeze(0).transpose(0, 1).cpu().numpy(),
                                          f0=pred_f0[0, 0, :].cpu().numpy())
 
-                mel_diff, pred_f0 = generator.module(x, tone, language, x_lengths,g=speakers, gen=True, glow=False)
-                y_diff = vocoder.spec2wav(mel_diff.squeeze(0).transpose(0, 1).cpu().numpy(),
-                                         f0=pred_f0[0, 0, :].cpu().numpy())
+                # mel_diff, pred_f0 = generator.module(x, f0=f0,g=speakers, gen=True, glow=False)
+                # y_diff = vocoder.spec2wav(mel_diff.squeeze(0).transpose(0, 1).cpu().numpy(),
+                #                          f0=pred_f0[0, 0, :].cpu().numpy())
 
 
                 y_rec = vocoder.spec2wav(mel.squeeze(0).transpose(0, 1).cpu().numpy(),
@@ -221,10 +208,10 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
 
                 img_dict.update({f"gen/mel_{batch_idx}": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
                                  f"gen/mel_flow_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_flow[0].data.cpu().numpy()),
-                                 f"gen/mel_diff_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_diff[0].data.cpu().numpy()),
+                                 # f"gen/mel_diff_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_diff[0].data.cpu().numpy()),
                                  })
                 audio_dict.update({
-                    "gen/wav_gen_{}_diff".format(batch_idx): y_diff,
+                    # "gen/wav_gen_{}_diff".format(batch_idx): y_diff,
                     "gen/wav_gen_{}_flow".format(batch_idx): y_flow,
                     "gen/wav_gen_{}_rec".format(batch_idx): y_rec,
                 })
