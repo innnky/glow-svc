@@ -8,7 +8,6 @@ import torch.utils.data
 import commons
 import mel_processing
 from utils import load_filepaths_and_text
-from text import cleaned_text_to_sequence
 import torch.nn.functional as F
 """Multi speaker version"""
 

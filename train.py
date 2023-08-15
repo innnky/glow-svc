@@ -16,7 +16,6 @@ from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate
 import models
 import commons
 import utils
-from text.symbols import symbols
 from hifigan import NsfHifiGAN
 
 global_step = 0
@@ -64,7 +63,7 @@ def train_and_eval(rank, n_gpus, hps):
                                 drop_last=True, collate_fn=collate_fn)
 
     generator = models.FlowGenerator(
-        n_vocab=len(symbols) + getattr(hps.data, "add_blank", False),
+        n_vocab=0,
         out_channels=hps.data.n_mel_channels,
         **hps.model).cuda(rank)
     # vocoder = Vocos.from_pretrained('vocos/config.yaml', 'vocos/pytorch_model.bin').cuda()
@@ -99,7 +98,6 @@ def train_and_eval(rank, n_gpus, hps):
         epoch_str = max(epoch_str, 1)
         global_step = (epoch_str - 1) * len(train_loader)
     except:
-        print("load pretrain failed!!!!\n" * 10)
         epoch_str = 1
         global_step = 0
     if skip_optimizer:
@@ -200,14 +198,14 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
                 y_rec = vocoder.spec2wav(mel.squeeze(0).transpose(0, 1).cpu().numpy(),
                                          f0=f0[0, :].cpu().numpy())
 
-                img_dict.update({f"gen/mel_{batch_idx}": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
+                img_dict.update({f"gt/mel_{batch_idx}": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
                                  f"gen/mel_flow_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_flow[0].data.cpu().numpy()),
                                  # f"gen/mel_diff_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_diff[0].data.cpu().numpy()),
                                  })
                 audio_dict.update({
                     # "gen/wav_gen_{}_diff".format(batch_idx): y_diff,
                     "gen/wav_gen_{}_flow".format(batch_idx): y_flow,
-                    "gen/wav_gen_{}_rec".format(batch_idx): y_rec,
+                    "gt/wav_gen_{}_rec".format(batch_idx): y_rec,
                 })
 
         utils.summarize(

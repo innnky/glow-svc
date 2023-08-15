@@ -5,7 +5,8 @@ from torch.utils.data import DataLoader
 import utils
 from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate
 from tqdm import tqdm
-
+import logging
+logging.getLogger('numba').setLevel(logging.INFO)
 config_path = 'configs/config.json'
 hps = utils.get_hparams_from_file(config_path)
 collate = TextAudioSpeakerCollate()
