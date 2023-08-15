@@ -1,7 +1,6 @@
 import os
 import torch
 from tqdm import tqdm
-from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torch.multiprocessing as mp
@@ -27,7 +26,7 @@ def main():
 
     n_gpus = torch.cuda.device_count()
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '8000'
+    os.environ['MASTER_PORT'] = '7998'
 
     hps = utils.get_hparams()
     mp.spawn(train_and_eval, nprocs=n_gpus, args=(n_gpus, hps,))
@@ -42,7 +41,7 @@ def train_and_eval(rank, n_gpus, hps):
         writer = SummaryWriter(log_dir=hps.model_dir)
         writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
 
-    dist.init_process_group(backend='nccl', init_method='env://', world_size=n_gpus, rank=rank)
+    dist.init_process_group(backend= 'gloo' if os.name == 'nt' else 'nccl', init_method='env://', world_size=n_gpus, rank=rank)
     torch.manual_seed(hps.train.seed)
     torch.cuda.set_device(rank)
 
@@ -79,7 +78,6 @@ def train_and_eval(rank, n_gpus, hps):
     generator = DDP(generator)
     epoch_str = 1
     global_step = 0
-    scaler = GradScaler(enabled=hps.train.fp16_run)
     #
     # try:
     #     _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
@@ -95,7 +93,9 @@ def train_and_eval(rank, n_gpus, hps):
     try:
         _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
                                                    optimizer_g, False)
-        epoch_str = max(epoch_str, 1)
+        epoch_str += 1
+        optimizer_g.step_num = (epoch_str - 1) * len(train_loader)
+        optimizer_g._update_learning_rate()
         global_step = (epoch_str - 1) * len(train_loader)
     except:
         epoch_str = 1
@@ -107,7 +107,7 @@ def train_and_eval(rank, n_gpus, hps):
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank == 0:
             evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder)
-            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer)
+            train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer)
             utils.save_checkpoint(generator, optimizer_g, hps.train.learning_rate, epoch,
                                   os.path.join(hps.model_dir, "G_{}.pth".format(epoch)))
             try:
@@ -117,10 +117,10 @@ def train_and_eval(rank, n_gpus, hps):
             except:
                 print(f'removing {to_remove_path} failed')
         else:
-            train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, None, None)
+            train(rank, epoch, hps, generator, optimizer_g, train_loader, None, None)
 
 
-def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer):
+def train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer):
     train_loader.sampler.set_epoch(epoch)
     global global_step
 
@@ -134,19 +134,15 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
         # Train Generator
         optimizer_g.zero_grad()
 
-        with autocast(enabled=hps.train.fp16_run):
-            (z, z_m, z_logs, logdet, z_mask), l_noise = generator(x, mel, mel_lengths,f0, g=speakers, gen=False)
-            l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
+        (z, z_m, z_logs, logdet, z_mask), l_noise = generator(x, mel, mel_lengths,f0, g=speakers, gen=False)
+        l_mle = commons.mle_loss(z, z_m, z_logs, logdet, z_mask)
 
-            loss_gs = [l_mle, l_noise]
-            loss_g = sum(loss_gs)
+        loss_gs = [l_mle, l_noise]
+        loss_g = sum(loss_gs)
 
-        optimizer_g.zero_grad()
-        scaler.scale(loss_g).backward()
-        scaler.unscale_(optimizer_g)
+        loss_g.backward()
         grad_norm = commons.clip_grad_value_(generator.parameters(), 5)
-        scaler.step(optimizer_g)
-        scaler.update()
+        optimizer_g.step()
         if rank == 0:
             if batch_idx % hps.train.log_interval == 0:
                 y_gen, _ = generator.module(x[:1],f0=f0[:1], g=speakers[:1], gen=True, glow=True)
@@ -154,7 +150,7 @@ def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger
                     epoch, batch_idx * len(x), len(train_loader.dataset),
                            100. * batch_idx / len(train_loader),
                     loss_g.item()))
-                lr = optimizer_g.param_groups[0]['lr']
+                lr = optimizer_g._optim.param_groups[0]['lr']
                 logger.info([x.item() for x in loss_gs] + [global_step, lr])
 
                 scalar_dict = {"loss/g/total": loss_g, "learning_rate": lr, "grad_norm": grad_norm}

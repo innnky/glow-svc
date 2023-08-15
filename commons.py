@@ -128,7 +128,6 @@ class Adam():
     self.cur_lr = lr * self._get_lr_scale()
     
     self._optim = torch.optim.Adam(params, lr=self.cur_lr, betas=betas, eps=eps)
-    self.param_groups = self._optim.param_groups
   def _get_lr_scale(self):
     if self.scheduler == "noam":
       return np.power(self.dim_model, -0.5) * np.min([np.power(self.step_num, -0.5), self.step_num * np.power(self.warmup_steps, -1.5)])

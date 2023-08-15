@@ -31,7 +31,7 @@
     "add_noise": true,
     "add_blank": true,
     "spk2id": {
-      "paimon": 0
+      "opencpop": 0
     }
   },
   "model": {
