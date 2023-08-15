@@ -52,7 +52,8 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         audiopaths_sid_text_new = []
         lengths = []
         skipped = 0
-        for _id, spk, language, text, tone in self.audiopaths_sid_text:
+        for item in self.audiopaths_sid_text:
+            _id, spk = item[:2]
             audiopath =  f'dataset/{spk}/{_id}.wav'
             if not os.path.exists(audiopath):
                 skipped += 1
@@ -61,13 +62,8 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
             if length_ < 120 or length_>1400:
                 skipped += 1
                 continue
-            if self.min_text_len <= len(text) and len(text) <= self.max_text_len:
-                text = text.split(" ")
-                tone = [int(i) for i in tone.split(" ")]
-                audiopaths_sid_text_new.append([audiopath, spk, language, text, tone])
-                lengths.append(length_)
-            else:
-                skipped += 1
+            audiopaths_sid_text_new.append([audiopath, spk])
+
         print("skipped: ", skipped, ", total: ", len(self.audiopaths_sid_text))
         self.audiopaths_sid_text = audiopaths_sid_text_new
         self.lengths = lengths
@@ -75,7 +71,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
 
     def get_audio_text_speaker_pair(self, audiopath_sid_text):
         # separate filename, speaker_id and text
-        audiopath, sid, language, text, tone = audiopath_sid_text
+        audiopath, sid = audiopath_sid_text
 
         mel, wav = self.get_spec(audiopath)
 

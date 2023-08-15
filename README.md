@@ -1,3 +1,8 @@
+# Glow-SVC
++ content-vec + fcpe(f0) -> glowtts -> nsf-hifigan -> wav
++ 坑多多多多多
++ fp16会炸
+
 # Glow-TTS: A Generative Flow for Text-to-Speech via Monotonic Alignment Search
 
 ### Jaehyeon Kim, Sungwon Kim, Jungil Kong, and Sungroh Yoon

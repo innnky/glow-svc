@@ -14,7 +14,7 @@ class HubertModelWithFinalProj(HubertModel):
     self.final_proj = nn.Linear(config.hidden_size, config.classifier_proj_size)
 
 def get_model():
-  model = HubertModelWithFinalProj.from_pretrained("./feature_extractor/content-vec-best")
+  model = HubertModelWithFinalProj.from_pretrained("./pretrain/content-vec-best")
   return model
 
 

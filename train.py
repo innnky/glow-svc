@@ -69,11 +69,11 @@ def train_and_eval(rank, n_gpus, hps):
         **hps.model).cuda(rank)
     # vocoder = Vocos.from_pretrained('vocos/config.yaml', 'vocos/pytorch_model.bin').cuda()
     vocoder = NsfHifiGAN('cuda')
-    optimizer_g = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, generator.parameters()),
-        hps.train.learning_rate,
-        betas=hps.train.betas,
-        eps=hps.train.eps)
+    optimizer_g = commons.Adam(generator.parameters(), scheduler=hps.train.scheduler,
+                               dim_model=hps.model.hidden_channels, warmup_steps=hps.train.warmup_steps,
+                               lr=hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
+
+
     # optimizer_g = commons.Adam(generator.parameters(), scheduler=hps.train.scheduler,
     #                            dim_model=hps.model.hidden_channels, warmup_steps=hps.train.warmup_steps,
     #                            lr=hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
@@ -92,10 +92,10 @@ def train_and_eval(rank, n_gpus, hps):
     #     if hps.train.ddi and os.path.isfile(os.path.join(hps.model_dir, "ddi_G.pth")):
     #         _ = utils.load_checkpoint(os.path.join(hps.model_dir, "ddi_G.pth"), generator, optimizer_g)
     #
-    pretrain_dir = None
+    pretrain_dir = "ss"
     try:
         if pretrain_dir is None:
-            _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.s1_ckpt_dir, "G_*.pth"), generator,
+            _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
                                                        optimizer_g, False)
             epoch_str = max(epoch_str, 1)
             global_step = (epoch_str - 1) * len(train_loader)
@@ -108,7 +108,6 @@ def train_and_eval(rank, n_gpus, hps):
         print("load pretrain failed!!!!\n" * 10)
         epoch_str = 1
         global_step = 0
-    scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optimizer_g, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2)
 
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
@@ -125,7 +124,6 @@ def train_and_eval(rank, n_gpus, hps):
                 print(f'removing {to_remove_path} failed')
         else:
             train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, None, None)
-        scheduler_g.step()
 
 
 def train(rank, epoch, hps, generator, optimizer_g, scaler, train_loader, logger, writer):
