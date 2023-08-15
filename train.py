@@ -92,23 +92,19 @@ def train_and_eval(rank, n_gpus, hps):
     #     if hps.train.ddi and os.path.isfile(os.path.join(hps.model_dir, "ddi_G.pth")):
     #         _ = utils.load_checkpoint(os.path.join(hps.model_dir, "ddi_G.pth"), generator, optimizer_g)
     #
-    pretrain_dir = "ss"
+    skip_optimizer = False
     try:
-        if pretrain_dir is None:
-            _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
-                                                       optimizer_g, False)
-            epoch_str = max(epoch_str, 1)
-            global_step = (epoch_str - 1) * len(train_loader)
-        else:
-            _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(pretrain_dir, "G_*.pth"), generator,
-                                                       optimizer_g, True)
-            epoch_str = 1
-            global_step = 0
+        _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), generator,
+                                                   optimizer_g, False)
+        epoch_str = max(epoch_str, 1)
+        global_step = (epoch_str - 1) * len(train_loader)
     except:
         print("load pretrain failed!!!!\n" * 10)
         epoch_str = 1
         global_step = 0
-
+    if skip_optimizer:
+        epoch_str = 1
+        global_step = 0
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank == 0:
