@@ -11,7 +11,7 @@
     "scheduler": "noam",
     "batch_size": 12,
     "ddi": true,
-    "fp16_run": true
+    "fp16_run": false
   },
   "data": {
     "load_mel_from_disk": false,
