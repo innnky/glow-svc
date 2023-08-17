@@ -7,6 +7,9 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import logging
+
+from vocos import Vocos
+
 logging.getLogger("matplotlib").setLevel(logging.INFO)
 logging.getLogger("h5py").setLevel(logging.INFO)
 logging.getLogger("numba").setLevel(logging.INFO)
@@ -65,8 +68,7 @@ def train_and_eval(rank, n_gpus, hps):
         n_vocab=0,
         out_channels=hps.data.n_mel_channels,
         **hps.model).cuda(rank)
-    # vocoder = Vocos.from_pretrained('vocos/config.yaml', 'vocos/pytorch_model.bin').cuda()
-    vocoder = NsfHifiGAN('cuda')
+    vocoder = Vocos.from_pretrained('pretrain/vocos/config.yaml', 'pretrain/vocos/pytorch_model.bin').cuda()
     optimizer_g = commons.Adam(generator.parameters(), scheduler=hps.train.scheduler,
                                dim_model=hps.model.hidden_channels, warmup_steps=hps.train.warmup_steps,
                                lr=hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
@@ -186,16 +188,14 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
                 f0 = f0.cuda(rank, non_blocking=True)
 
                 mel_flow, pred_f0 = generator.module(x, f0=f0, g=speakers, gen=True, glow=True)
-                y_flow = vocoder.spec2wav(mel_flow.squeeze(0).transpose(0, 1).cpu().numpy(),
-                                         f0=pred_f0[0, 0, :].cpu().numpy())
+                y_flow = vocoder.decode(mel_flow)
 
                 # mel_diff, pred_f0 = generator.module(x, f0=f0,g=speakers, gen=True, glow=False)
                 # y_diff = vocoder.spec2wav(mel_diff.squeeze(0).transpose(0, 1).cpu().numpy(),
                 #                          f0=pred_f0[0, 0, :].cpu().numpy())
 
 
-                y_rec = vocoder.spec2wav(mel.squeeze(0).transpose(0, 1).cpu().numpy(),
-                                         f0=f0[0, :].cpu().numpy())
+                y_rec = vocoder.decode(mel)
 
                 img_dict.update({f"gt/mel_{batch_idx}": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
                                  f"gen/mel_flow_{batch_idx}": utils.plot_spectrogram_to_numpy(mel_flow[0].data.cpu().numpy()),
@@ -203,8 +203,8 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
                                  })
                 audio_dict.update({
                     # "gen/wav_gen_{}_diff".format(batch_idx): y_diff,
-                    "gen/wav_gen_{}_flow".format(batch_idx): y_flow,
-                    "gt/wav_gen_{}_rec".format(batch_idx): y_rec,
+                    "gen/wav_gen_{}_flow".format(batch_idx): y_flow[0].cpu().numpy(),
+                    "gt/wav_gen_{}_rec".format(batch_idx): y_rec[0].cpu().numpy()
                 })
 
         utils.summarize(

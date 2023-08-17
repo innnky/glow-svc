@@ -1,14 +1,14 @@
 # Glow-SVC
 
 another implement by rcell based on official [glow-tts](https://github.com/jaywalnut310/glow-tts) repo
-+ content-vec + fcpe(f0) -> glowtts -> nsf-hifigan -> wav
++ content-vec + fcpe(f0) -> glowtts -> vocos -> wav
 + 坑多多多多多
 + fp16会炸炸炸
 
 pretrain:
 + [content-vec-best](https://huggingface.co/lengyue233/content-vec-best/resolve/main/pytorch_model.bin)
 + [fcpe](https://huggingface.co/datasets/ylzz1997/rmvpe_pretrain_model/resolve/main/fcpe.pt)
-+ [nsf-hifigan](https://github.com/openvpi/vocoders/releases/download/nsf-hifigan-v1/nsf_hifigan_20221211.zip)
++ [vocos](https://huggingface.co/charactr/vocos-mel-24khz/resolve/main/pytorch_model.bin)
 
 
 preprocess：

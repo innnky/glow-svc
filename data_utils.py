@@ -4,6 +4,7 @@ import random
 import numpy as np
 import torch
 import torch.utils.data
+import torchaudio
 
 import commons
 import mel_processing
@@ -39,6 +40,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         random.shuffle(self.audiopaths_sid_text)
         self._filter(val)
         self.fcpe = None
+        self.vocos = None
 
     def _filter(self, val):
         """
@@ -82,22 +84,19 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         return (ssl, mel, wav, sid, f0)
 
     def get_spec(self, filename):
-        wav_torch, _ = mel_processing.load_wav_to_torch(filename, target_sr=self.hps.sampling_rate)
+        wav_torch, _ = torchaudio.load(filename)
         mel_path = filename.replace(".wav", ".mel.pt")
         if os.path.exists(mel_path):
             mel = torch.load(mel_path)
             return mel, wav_torch.unsqueeze(0)
 
-        mel = mel_processing.get_mel(wav_torch,
-                                     self.hps.sampling_rate,
-                                     self.hps.n_mel_channels,
-                                     self.hps.filter_length,
-                                     self.hps.win_length,
-                                     self.hps.hop_length,
-                                     self.hps.mel_fmin,
-                                     self.hps.mel_fmax)
-        torch.save(mel, mel_path)
-        return mel, wav_torch.unsqueeze(0)
+        if self.vocos == None:
+            from vocos import Vocos
+            self.vocos =  Vocos.from_pretrained('pretrain/vocos/config.yaml', 'pretrain/vocos/pytorch_model.bin').cuda()
+
+        features = self.vocos.feature_extractor(wav_torch)
+
+        return features.squeeze(0), wav_torch
 
     def get_text(self, text, tone, language):
         text_norm, tone, language = cleaned_text_to_sequence(text, tone, language)
