@@ -56,7 +56,7 @@ def train_and_eval(rank, n_gpus, hps):
                               batch_size=hps.train.batch_size, pin_memory=True,
                               drop_last=True, collate_fn=collate_fn, sampler=train_sampler, persistent_workers=True)
     if rank == 0:
-        val_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps.data)
+        val_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps.data, val=True)
         val_loader = DataLoader(val_dataset, num_workers=0, shuffle=False,
                                 batch_size=1, pin_memory=True,
                                 drop_last=True, collate_fn=collate_fn)
@@ -106,16 +106,19 @@ def train_and_eval(rank, n_gpus, hps):
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank == 0:
-            evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder)
+            save_interval = 5
+            if epoch % save_interval == 0:
+                evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder)
             train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer)
-            utils.save_checkpoint(generator, optimizer_g, hps.train.learning_rate, epoch,
-                                  os.path.join(hps.model_dir, "G_{}.pth".format(epoch)))
-            try:
-                to_remove_path = os.path.join(hps.model_dir, "G_{}.pth".format(epoch - 3))
-                os.remove(to_remove_path)
-                print(f'removing {to_remove_path}')
-            except:
-                print(f'removing {to_remove_path} failed')
+            if epoch % save_interval == 0:
+                utils.save_checkpoint(generator, optimizer_g, hps.train.learning_rate, epoch,
+                                      os.path.join(hps.model_dir, "G_{}.pth".format(epoch)))
+                try:
+                    to_remove_path = os.path.join(hps.model_dir, "G_{}.pth".format(epoch - save_interval* 3))
+                    os.remove(to_remove_path)
+                    print(f'removing {to_remove_path}')
+                except:
+                    print(f'removing {to_remove_path} failed')
         else:
             train(rank, epoch, hps, generator, optimizer_g, train_loader, None, None)
 

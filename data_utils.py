@@ -19,7 +19,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         3) computes spectrograms from audio files.
     """
 
-    def __init__(self, audiopaths_sid_text, hparams):
+    def __init__(self, audiopaths_sid_text, hparams, val=False):
         self.audiopaths_sid_text = load_filepaths_and_text(audiopaths_sid_text)
         self.max_wav_value = hparams.max_wav_value
         self.sampling_rate = hparams.sampling_rate
@@ -37,10 +37,10 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         self.hps = hparams
         random.seed(1234)
         random.shuffle(self.audiopaths_sid_text)
-        self._filter()
+        self._filter(val)
         self.fcpe = None
 
-    def _filter(self):
+    def _filter(self, val):
         """
         Filter text & store spec lengths
         """
@@ -58,7 +58,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
                 skipped += 1
                 continue
             length_ = os.path.getsize(audiopath) // (2 * self.hop_length)
-            if length_ < 120 or length_>1400:
+            if (length_ < 120 or length_>1400 ) and not val:
                 skipped += 1
                 continue
             audiopaths_sid_text_new.append([audiopath, spk])
