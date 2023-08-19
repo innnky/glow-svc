@@ -79,10 +79,10 @@ class STFT():
         fmax       = self.fmax
         clip_val   = self.clip_val
 
-        if torch.min(y) < -1.:
-            print('min value is ', torch.min(y))
-        if torch.max(y) > 1.:
-            print('max value is ', torch.max(y))
+        # if torch.min(y) < -1.:
+        #     print('min value is ', torch.min(y))
+        # if torch.max(y) > 1.:
+        #     print('max value is ', torch.max(y))
 
         if fmax not in self.mel_basis:
             mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax)

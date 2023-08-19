@@ -50,7 +50,8 @@ class FCPEF0Predictor(F0Predictor):
             return results[0, 0]
         elif ndim == 2:
             return results[0]
-
+        elif ndim ==3:
+            return results
     def post_process(self, x, sampling_rate, f0, pad_to):
         if isinstance(f0, np.ndarray):
             f0 = torch.from_numpy(f0).float().to(x.device)
@@ -97,7 +98,7 @@ class FCPEF0Predictor(F0Predictor):
         return self.post_process(x, self.sampling_rate, f0, p_len)[0]
 
     def compute_f0_uv(self, wav, p_len=None):
-        x = torch.FloatTensor(wav).to(self.dtype).to(self.device)
+        x = wav
         if p_len is None:
             p_len = x.shape[0] // self.hop_length
         else:

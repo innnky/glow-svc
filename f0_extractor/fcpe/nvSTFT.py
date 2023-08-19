@@ -89,10 +89,10 @@ class STFT():
             mel_basis = {}
             hann_window = {}
         
-        if torch.min(y) < -1.:
-            print('min value is ', torch.min(y))
-        if torch.max(y) > 1.:
-            print('max value is ', torch.max(y))
+        # if torch.min(y) < -1.:
+        #     print('min value is ', torch.min(y))
+        # if torch.max(y) > 1.:
+        #     print('max value is ', torch.max(y))
         
         mel_basis_key = str(fmax)+'_'+str(y.device)
         if mel_basis_key not in mel_basis:

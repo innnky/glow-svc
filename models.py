@@ -331,6 +331,8 @@ class FlowGenerator(nn.Module):
 
         if gen:
             z = (z_m + torch.exp(z_logs) * torch.randn_like(z_m) * noise_scale) * z_mask
+            # z = F.interpolate(z, size=int(z.shape[-1]*1.875), mode="nearest")
+            # z_mask = torch.ones(1, 1, z.shape[-1]).to(z.device)
             y, logdet = self.decoder(z, z_mask, g=g, reverse=True)
             return y, f0.unsqueeze(1)
         else:

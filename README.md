@@ -19,4 +19,4 @@ train:
 + python train.py -c configs/config.json -m model_name
 
 infer:
-+ 暂无
++ [infer.py](infer.py)
