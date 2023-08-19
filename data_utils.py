@@ -84,17 +84,18 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         return (ssl, mel, wav, sid, f0)
 
     def get_spec(self, filename):
-        wav_torch, _ = torchaudio.load(filename)
+        wav_torch, sr = torchaudio.load(filename)
+        assert sr == self.sampling_rate
         mel_path = filename.replace(".wav", ".mel.pt")
         if os.path.exists(mel_path):
             mel = torch.load(mel_path)
-            return mel, wav_torch.unsqueeze(0)
-
+            return mel, wav_torch
         if self.vocos == None:
             from vocos import Vocos
-            self.vocos =  Vocos.from_pretrained('pretrain/vocos/config.yaml', 'pretrain/vocos/pytorch_model.bin').cuda()
-
+            self.vocos =  Vocos.from_pretrained('pretrain/vocos/config.yaml', 'pretrain/vocos/pytorch_model.bin')
+            print('init vocos')
         features = self.vocos.feature_extractor(wav_torch)
+        torch.save(features.squeeze(0), mel_path)
 
         return features.squeeze(0), wav_torch
 

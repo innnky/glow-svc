@@ -19,7 +19,7 @@ import librosa
 
 def process_one(file_path, model):
     path = Path(file_path)
-    
+
     ssl_path = file_path.replace(".wav", ".ssl.pt")
     # try:
     #     torch.load(ssl_path)
@@ -33,9 +33,9 @@ def process_one(file_path, model):
         ssl_content = contentvec768.get_content(model, wav_16k_tensor=wav16k)
         torch.save(ssl_content.cpu(), ssl_path)
         if not os.path.exists(ssl_path):
-            print("errrrrrrrrrrrrrrrrr"*1000)
+            print("errrrrrrrrrrrrrrrrr" * 1000)
         # exit(0)
-        
+
 
 def process_batch(filenames):
     print("Loading hubert for content...")
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     num_processes = 1
     chunk_size = int(math.ceil(len(filenames) / num_processes))
     chunks = [
-        filenames[i : i + chunk_size] for i in range(0, len(filenames), chunk_size)
+        filenames[i: i + chunk_size] for i in range(0, len(filenames), chunk_size)
     ]
     print([len(c) for c in chunks])
     processes = [

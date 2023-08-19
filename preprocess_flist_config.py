@@ -18,7 +18,8 @@ for spk in os.listdir('dataset'):
 
 
 import random
-random.shuffle(data_all)
+# random.shuffle(data_all)
+data_all = sorted(data_all)
 data_train = data_all[:-5]
 data_val = data_all[-5:]
 with open('filelists/train.list', 'w', encoding='utf-8') as f:

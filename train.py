@@ -18,7 +18,7 @@ from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate
 import models
 import commons
 import utils
-from hifigan import NsfHifiGAN
+# from hifigan import NsfHifiGAN
 
 global_step = 0
 
@@ -108,7 +108,7 @@ def train_and_eval(rank, n_gpus, hps):
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank == 0:
-            save_interval = 5
+            save_interval = 60
             if epoch % save_interval == 0:
                 evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, writer_eval, vocoder)
             train(rank, epoch, hps, generator, optimizer_g, train_loader, logger, writer)
@@ -193,7 +193,6 @@ def evaluate(rank, epoch, hps, generator, optimizer_g, val_loader, logger, write
                 # mel_diff, pred_f0 = generator.module(x, f0=f0,g=speakers, gen=True, glow=False)
                 # y_diff = vocoder.spec2wav(mel_diff.squeeze(0).transpose(0, 1).cpu().numpy(),
                 #                          f0=pred_f0[0, 0, :].cpu().numpy())
-
 
                 y_rec = vocoder.decode(mel)
 

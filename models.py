@@ -6,7 +6,6 @@ from torch.nn import functional as F
 import modules
 import commons
 import attentions
-from diffusion import GaussianDiffusion
 
 
 class DurationPredictor(nn.Module):
@@ -223,87 +222,6 @@ class F0Predictor(nn.Module):
             pred_f0 = torch.pow(10, pred_f0)
             pred_f0 = (pred_f0 - 1) * 700.
             return pred_lf0, pred_f0
-
-
-
-class DiffusionWrapper(nn.Module):
-    def __init__(self,
-                 out_channels,
-                 in_channels,
-                 residual_channels=512,
-                 residual_layers=20,
-                 denoiser_dropout=0.2,
-                 noise_schedule_naive='cosine',
-                 timesteps=100,
-                 max_beta=0.06,
-                 s=0.008,
-                 noise_loss='l1',
-                 stats_path=None,
-                 gin_channels=None
-                 ):
-        super().__init__()
-        self.diffusion = GaussianDiffusion(out_channels,
-                                           in_channels,
-                                           residual_channels,
-                                           residual_layers,
-                                           denoiser_dropout,
-                                           noise_schedule_naive,
-                                           timesteps,
-                                           max_beta,
-                                           s,
-                                           noise_loss,
-                                           stats_path
-                                           )
-        self.cond = nn.Conv1d(gin_channels, in_channels, 1)
-    def forward(self, x, y, mask, g):
-        cond = self.cond(g.detach())
-        _, _, loss_noise, _ = self.diffusion(y.transpose(1, 2),(x+cond).transpose(1, 2), ~(mask.transpose(1, 2).bool()))
-        return loss_noise
-
-    def infer(self, x, g):
-        cond = self.cond(g)
-        output, _, _, _ = self.diffusion(None, (x+cond).transpose(1, 2), None)
-        return output.transpose(1, 2)
-
-
-class VarianceDiffusion(DiffusionWrapper):
-    def __init__(self,
-                 repeat_dim,
-                 in_channels,
-                 residual_channels=512,
-                 residual_layers=20,
-                 denoiser_dropout=0.2,
-                 noise_schedule_naive='cosine',
-                 timesteps=100,
-                 max_beta=0.06,
-                 s=0.008,
-                 noise_loss='l1',
-                 stats_path=None,
-                 gin_channels=None
-                 ):
-        super().__init__(repeat_dim,
-                 in_channels,
-                 residual_channels,
-                 residual_layers,
-                 denoiser_dropout,
-                 noise_schedule_naive,
-                 timesteps,
-                 max_beta,
-                 s,
-                 noise_loss,
-                 stats_path,
-                 gin_channels)
-        self.cond = nn.Conv1d(gin_channels, in_channels, 1)
-        self.repeat_dim = 64
-
-    def forward(self, x, y, mask, g):
-        y = y.repeat(1, self.repeat_dim, 1)
-        return super().forward(x, y, mask, g)
-
-    def infer(self, x, g):
-        pred_variance = super().infer(x, g)
-        pred_variance = torch.mean(pred_variance, dim=1).unsqueeze(1)
-        return pred_variance
 
 
 
